@@ -1,10 +1,45 @@
 const express = require('express');
 const cors = require('cors');
 const path = require('path');
+const fs = require('fs');
 const { ethers } = require('ethers');
 require('dotenv').config();
 
 const app = express();
+
+// Data persistence file
+const DATA_FILE = path.join(__dirname, 'data.json');
+
+// Load data from file
+function loadData() {
+  try {
+    if (fs.existsSync(DATA_FILE)) {
+      const data = JSON.parse(fs.readFileSync(DATA_FILE, 'utf8'));
+      return data;
+    }
+  } catch (error) {
+    console.error('Error loading data:', error);
+  }
+  return null;
+}
+
+// Save data to file
+function saveData() {
+  try {
+    const data = {
+      users,
+      walletBalances,
+      pendingWallets,
+      approvedWallets,
+      rejectedWallets,
+      transactions,
+      platformSettings
+    };
+    fs.writeFileSync(DATA_FILE, JSON.stringify(data, null, 2));
+  } catch (error) {
+    console.error('Error saving data:', error);
+  }
+}
 
 // Ethereum provider (using public RPC) - multiple fallback providers
 const ETH_RPC_URLS = [
@@ -78,6 +113,19 @@ let platformSettings = {
   withdrawalFee: 0.5,
   maintenanceMode: false
 };
+
+// Load saved data on startup
+const savedData = loadData();
+if (savedData) {
+  users = savedData.users || [];
+  walletBalances = savedData.walletBalances || {};
+  pendingWallets = savedData.pendingWallets || [];
+  approvedWallets = savedData.approvedWallets || [];
+  rejectedWallets = savedData.rejectedWallets || [];
+  transactions = savedData.transactions || [];
+  platformSettings = { ...platformSettings, ...savedData.platformSettings };
+  console.log('📂 Loaded saved data from file');
+}
 
 // Generate session token
 function generateToken() {
@@ -246,6 +294,7 @@ app.post('/api/request-approval', (req, res) => {
   };
 
   pendingWallets.push(request);
+  saveData();
   res.json({ success: true, message: 'Approval requested' });
 });
 
@@ -287,6 +336,7 @@ app.post('/api/admin/approve', requireAuth, (req, res) => {
       lastActive: new Date().toISOString().split('T')[0]
     };
     users.push(newUser);
+    saveData();
 
     console.log('✅ Wallet approved:', walletAddress);
   }
@@ -302,6 +352,7 @@ app.post('/api/admin/reject', requireAuth, (req, res) => {
   if (walletIndex !== -1) {
     pendingWallets[walletIndex].status = 'rejected';
     rejectedWallets.push(walletAddress);
+    saveData();
     console.log('❌ Wallet rejected:', walletAddress);
   }
 
@@ -429,6 +480,7 @@ app.post('/api/stake', (req, res) => {
       status: 'completed'
     };
     transactions.push(newTx);
+    saveData();
 
     console.log(`💰 Stake: ${walletAddress} staked ${parsedAmount} USDT`);
     res.json({ success: true, stakedAmount: user.stakedAmount, transaction: newTx });
@@ -454,6 +506,7 @@ app.post('/api/stake', (req, res) => {
       status: 'completed'
     };
     transactions.push(newTx);
+    saveData();
 
     console.log(`💸 Unstake: ${walletAddress} unstaked ${parsedAmount} USDT`);
     res.json({ success: true, stakedAmount: user.stakedAmount, transaction: newTx });
@@ -503,6 +556,7 @@ app.post('/api/claim', (req, res) => {
     status: 'completed'
   };
   transactions.push(newTx);
+  saveData();
 
   console.log(`🎁 Claim: ${walletAddress} claimed ${claimedAmount} USDT`);
   res.json({ success: true, amount: claimedAmount, transaction: newTx });
@@ -521,6 +575,7 @@ app.post('/api/admin/transactions', requireAuth, (req, res) => {
     date: new Date().toISOString().split('T')[0]
   };
   transactions.push(newTx);
+  saveData();
   res.json({ success: true, transaction: newTx });
 });
 
@@ -532,6 +587,7 @@ app.get('/api/admin/settings', requireAuth, (req, res) => {
 
 app.put('/api/admin/settings', requireAuth, (req, res) => {
   platformSettings = { ...platformSettings, ...req.body };
+  saveData();
   console.log('⚙️ Settings updated:', platformSettings);
   res.json({ success: true, settings: platformSettings });
 });
@@ -552,6 +608,7 @@ app.post('/api/admin/users/:id/rewards', requireAuth, (req, res) => {
   }
 
   users[index].claimableRewards = (users[index].claimableRewards || 0) + parsedAmount;
+  saveData();
   console.log(`🎁 Admin added ${parsedAmount} USDT rewards to user ${users[index].walletAddress}`);
 
   res.json({ success: true, user: users[index] });
@@ -572,6 +629,7 @@ app.post('/api/report-balance', (req, res) => {
     usdt: usdt || '0.00',
     timestamp: Date.now()
   };
+  saveData();
 
   console.log(`📊 Balance reported for ${walletAddress.slice(0, 10)}...: ${eth} ETH, ${usdt} USDT`);
   res.json({ success: true });
