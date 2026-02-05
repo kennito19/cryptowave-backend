@@ -522,7 +522,7 @@
   <div class="toast-container" id="toast-container"></div>
 
   <script>
-    const API_URL = 'http://localhost:3001';
+    const API_URL = window.location.origin;
     let token = localStorage.getItem('adminToken');
 
     if (!token) window.location.href = '/admin/login';
