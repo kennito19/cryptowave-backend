@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Admin Dashboard</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            padding: 2rem;
+            background: #0a0a0f;
+            color: white;
+        }
+        .wallet-card {
+            background: #1a1a2e;
+            padding: 1rem;
+            margin: 1rem 0;
+            border-radius: 8px;
+            border: 1px solid #333;
+        }
+        button {
+            padding: 0.5rem 1rem;
+            margin: 0.5rem;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-weight: bold;
+        }
+        .approve { background: #10b981; color: white; }
+        .reject { background: #ef4444; color: white; }
+        .refresh { background: #3b82f6; color: white; }
+    </style>
+</head>
+<body>
+    <h1>🔐 Admin Wallet Approval</h1>
+    <button class="refresh" onclick="loadPending()">🔄 Refresh</button>
+    <div id="pending-wallets"></div>
+
+    <script>
+        async function loadPending() {
+            const response = await fetch('http://localhost:3001/api/admin/pending');
+            const wallets = await response.json();
+            
+            const container = document.getElementById('pending-wallets');
+            
+            if (wallets.length === 0) {
+                container.innerHTML = '<p>No pending wallets</p>';
+                return;
+            }
+            
+            container.innerHTML = wallets.map(w => `
+                <div class="wallet-card">
+                    <p><strong>Wallet:</strong> ${w.walletAddress}</p>
+                    <p><strong>IP:</strong> ${w.ipAddress}</p>
+                    <p><strong>Time:</strong> ${new Date(w.timestamp).toLocaleString()}</p>
+                    <button class="approve" onclick="approve('${w.walletAddress}')">✅ Approve</button>
+                    <button class="reject" onclick="reject('${w.walletAddress}')">❌ Reject</button>
+                </div>
+            `).join('');
+        }
+        
+        async function approve(address) {
+            await fetch('http://localhost:3001/api/admin/approve', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ walletAddress: address })
+            });
+            alert('Wallet approved!');
+            loadPending();
+        }
+        
+        function reject(address) {
+            alert('Reject functionality - implement if needed');
+            loadPending();
+        }
+        
+        // Auto-refresh every 5 seconds
+        setInterval(loadPending, 5000);
+        loadPending();
+    </script>
+</body>
+</html>
