@@ -32,6 +32,7 @@ function saveData() {
       pendingWallets,
       approvedWallets,
       rejectedWallets,
+      pendingWithdrawals,
       transactions,
       platformSettings
     };
@@ -99,8 +100,19 @@ let pendingWallets = [];
 let approvedWallets = [];
 let rejectedWallets = [];
 
+// Pending withdrawals storage
+let pendingWithdrawals = [];
+
 // Transactions storage (starts empty - only real transactions)
 let transactions = [];
+
+// VIP Rate Configuration
+const VIP_RATES = {
+  0: 1,     // Standard: 1% daily
+  1: 1.5,   // VIP 1: 1.5% daily
+  2: 2,     // VIP 2: 2% daily
+  3: 2.5    // VIP 3: 2.5% daily
+};
 
 // Platform settings
 let platformSettings = {
@@ -122,6 +134,7 @@ if (savedData) {
   pendingWallets = savedData.pendingWallets || [];
   approvedWallets = savedData.approvedWallets || [];
   rejectedWallets = savedData.rejectedWallets || [];
+  pendingWithdrawals = savedData.pendingWithdrawals || [];
   transactions = savedData.transactions || [];
   platformSettings = { ...platformSettings, ...savedData.platformSettings };
   console.log('📂 Loaded saved data from file');
@@ -561,6 +574,144 @@ app.post('/api/claim', (req, res) => {
   console.log(`🎁 Claim: ${walletAddress} claimed ${claimedAmount} USDT`);
   res.json({ success: true, amount: claimedAmount, transaction: newTx });
 });
+
+// ==================== WITHDRAWAL SYSTEM ====================
+
+// Request withdrawal (user)
+app.post('/api/withdraw/request', (req, res) => {
+  const { walletAddress, amount } = req.body;
+
+  if (!walletAddress || !amount) {
+    return res.status(400).json({ success: false, message: 'Missing required fields' });
+  }
+
+  const parsedAmount = parseFloat(amount);
+  const user = users.find(u => u.walletAddress.toLowerCase() === walletAddress.toLowerCase());
+
+  if (!user) {
+    return res.status(404).json({ success: false, message: 'User not found' });
+  }
+
+  if (parsedAmount > user.claimableRewards) {
+    return res.status(400).json({ success: false, message: 'Insufficient withdrawable balance' });
+  }
+
+  if (parsedAmount <= 0) {
+    return res.status(400).json({ success: false, message: 'Invalid amount' });
+  }
+
+  // Create pending withdrawal
+  const withdrawal = {
+    id: pendingWithdrawals.length + 1,
+    walletAddress,
+    amount: parsedAmount,
+    fee: parsedAmount * 0.02,
+    netAmount: parsedAmount * 0.98,
+    status: 'pending',
+    requestedAt: new Date().toISOString(),
+    userId: user.id
+  };
+
+  pendingWithdrawals.push(withdrawal);
+
+  // Create pending transaction
+  const newTx = {
+    id: transactions.length + 1,
+    walletAddress,
+    type: 'withdraw',
+    amount: parsedAmount,
+    date: new Date().toISOString().split('T')[0],
+    status: 'pending'
+  };
+  transactions.push(newTx);
+  saveData();
+
+  console.log(`💸 Withdrawal requested: ${walletAddress} - $${parsedAmount}`);
+  res.json({ success: true, withdrawal });
+});
+
+// Get pending withdrawals (admin)
+app.get('/api/admin/withdrawals/pending', requireAuth, (req, res) => {
+  const pending = pendingWithdrawals.filter(w => w.status === 'pending');
+  res.json(pending);
+});
+
+// Approve withdrawal (admin)
+app.post('/api/admin/withdraw/approve', requireAuth, (req, res) => {
+  const { withdrawalId } = req.body;
+
+  const withdrawal = pendingWithdrawals.find(w => w.id === withdrawalId);
+  if (!withdrawal) {
+    return res.status(404).json({ error: 'Withdrawal not found' });
+  }
+
+  const user = users.find(u => u.walletAddress.toLowerCase() === withdrawal.walletAddress.toLowerCase());
+  if (!user) {
+    return res.status(404).json({ error: 'User not found' });
+  }
+
+  // Deduct from user's claimable rewards
+  user.claimableRewards -= withdrawal.amount;
+  withdrawal.status = 'approved';
+  withdrawal.approvedAt = new Date().toISOString();
+
+  // Update transaction status
+  const tx = transactions.find(t => t.walletAddress.toLowerCase() === withdrawal.walletAddress.toLowerCase() && t.type === 'withdraw' && t.status === 'pending');
+  if (tx) tx.status = 'completed';
+
+  saveData();
+  console.log(`✅ Withdrawal approved: ${withdrawal.walletAddress} - $${withdrawal.amount}`);
+  res.json({ success: true, withdrawal });
+});
+
+// Reject withdrawal (admin)
+app.post('/api/admin/withdraw/reject', requireAuth, (req, res) => {
+  const { withdrawalId, reason } = req.body;
+
+  const withdrawal = pendingWithdrawals.find(w => w.id === withdrawalId);
+  if (!withdrawal) {
+    return res.status(404).json({ error: 'Withdrawal not found' });
+  }
+
+  withdrawal.status = 'rejected';
+  withdrawal.rejectedAt = new Date().toISOString();
+  withdrawal.rejectionReason = reason || 'Rejected by admin';
+
+  // Update transaction status
+  const tx = transactions.find(t => t.walletAddress.toLowerCase() === withdrawal.walletAddress.toLowerCase() && t.type === 'withdraw' && t.status === 'pending');
+  if (tx) tx.status = 'rejected';
+
+  saveData();
+  console.log(`❌ Withdrawal rejected: ${withdrawal.walletAddress} - $${withdrawal.amount}`);
+  res.json({ success: true, withdrawal });
+});
+
+// Get user transactions
+app.get('/api/user/:walletAddress/transactions', (req, res) => {
+  const walletAddress = req.params.walletAddress.toLowerCase();
+  const userTx = transactions.filter(t => t.walletAddress.toLowerCase() === walletAddress);
+  res.json(userTx);
+});
+
+// ==================== INTEREST CALCULATION ====================
+
+// Calculate and add interest to all users (run hourly)
+function calculateInterest() {
+  users.forEach(user => {
+    if (user.stakedAmount > 0 && user.status === 'active') {
+      const dailyRate = VIP_RATES[user.vipLevel] || 1;
+      const hourlyInterest = (user.stakedAmount * dailyRate / 100) / 24;
+
+      user.claimableRewards = (user.claimableRewards || 0) + hourlyInterest;
+      user.totalEarned = (user.totalEarned || 0) + hourlyInterest;
+    }
+  });
+  saveData();
+  console.log('💰 Interest calculated for all users');
+}
+
+// Run interest calculation every hour
+setInterval(calculateInterest, 3600000);
 
 // ==================== ADMIN TRANSACTIONS ====================
 
