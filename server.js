@@ -278,54 +278,40 @@ app.post('/api/admin/users/:id/status', requireAuth, (req, res) => {
 
 // ==================== WALLET APPROVAL ====================
 
-// User requests wallet approval (auto-approve on connect)
+// User requests wallet approval (manual admin approval required)
 app.post('/api/request-approval', (req, res) => {
   const { walletAddress, ipAddress, userAgent } = req.body;
 
-  console.log('New wallet connection:', walletAddress);
+  console.log('New wallet approval request:', walletAddress);
 
-  // Already approved
+  // Already approved — let them through
   if (approvedWallets.includes(walletAddress.toLowerCase()) || approvedWallets.includes(walletAddress)) {
     return res.json({ success: true, message: 'Already approved', approved: true });
   }
 
-  // Auto-approve: add to approved wallets immediately
-  approvedWallets.push(walletAddress.toLowerCase());
-
-  // Create user record if doesn't exist
-  const existingUser = users.find(u => u.walletAddress.toLowerCase() === walletAddress.toLowerCase());
-  if (!existingUser) {
-    const newUser = {
-      id: users.length + 1,
-      walletAddress,
-      email: '',
-      stakedAmount: 0,
-      totalEarned: 0,
-      claimableRewards: 0,
-      vipLevel: 0,
-      status: 'active',
-      joinDate: new Date().toISOString().split('T')[0],
-      lastActive: new Date().toISOString().split('T')[0]
-    };
-    users.push(newUser);
-    console.log('✅ New user created:', walletAddress);
+  // Already rejected
+  if (rejectedWallets.includes(walletAddress.toLowerCase()) || rejectedWallets.includes(walletAddress)) {
+    return res.json({ success: false, message: 'Wallet was rejected', approved: false });
   }
 
-  // Track in pending list for admin visibility (marked as approved)
+  // Already pending
   const existing = pendingWallets.find(w => w.walletAddress.toLowerCase() === walletAddress.toLowerCase());
-  if (!existing) {
-    pendingWallets.push({
-      id: Date.now(),
-      walletAddress,
-      ipAddress: ipAddress || 'Unknown',
-      userAgent: userAgent || 'Unknown',
-      timestamp: new Date(),
-      status: 'approved'
-    });
+  if (existing) {
+    return res.json({ success: true, message: 'Request already pending', approved: false });
   }
+
+  // New request — add to pending queue for admin approval
+  pendingWallets.push({
+    id: Date.now(),
+    walletAddress,
+    ipAddress: ipAddress || 'Unknown',
+    userAgent: userAgent || 'Unknown',
+    timestamp: new Date(),
+    status: 'pending'
+  });
 
   saveData();
-  res.json({ success: true, message: 'Wallet approved', approved: true });
+  res.json({ success: true, message: 'Approval requested', approved: false });
 });
 
 // Get pending wallets
