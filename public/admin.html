@@ -405,6 +405,11 @@
             <span class="icon">💳</span>
             <span>Transactions</span>
           </button>
+          <button class="nav-item" data-page="withdrawals">
+            <span class="icon">💸</span>
+            <span>Withdrawals</span>
+            <span class="badge" id="withdrawal-count" style="display:none;">0</span>
+          </button>
         </div>
 
         <div class="nav-section">
@@ -473,6 +478,24 @@
             <table class="table">
               <thead><tr><th>ID</th><th>Wallet</th><th>Type</th><th>Amount</th><th>Date</th><th>Status</th></tr></thead>
               <tbody id="transactions-table"><tr><td colspan="6" class="loading"><div class="spinner"></div></td></tr></tbody>
+            </table>
+          </div>
+        </section>
+
+        <!-- Withdrawals Page -->
+        <section id="page-withdrawals" class="page-section">
+          <div class="section-title">Pending Withdrawals</div>
+          <div class="table-container">
+            <table class="table">
+              <thead><tr><th>ID</th><th>Wallet Address</th><th>Amount</th><th>Fee</th><th>Net Amount</th><th>Requested</th><th>Status</th><th>Actions</th></tr></thead>
+              <tbody id="withdrawals-table"><tr><td colspan="8" class="loading"><div class="spinner"></div></td></tr></tbody>
+            </table>
+          </div>
+          <div class="section-title" style="margin-top: 2rem;">All Withdrawals</div>
+          <div class="table-container">
+            <table class="table">
+              <thead><tr><th>ID</th><th>Wallet Address</th><th>Amount</th><th>Fee</th><th>Net Amount</th><th>Requested</th><th>Status</th></tr></thead>
+              <tbody id="all-withdrawals-table"><tr><td colspan="7" class="loading"><div class="spinner"></div></td></tr></tbody>
             </table>
           </div>
         </section>
@@ -588,6 +611,7 @@
         case 'users': loadUsers(); break;
         case 'approvals': loadApprovals(); break;
         case 'transactions': loadTransactions(); break;
+        case 'withdrawals': loadWithdrawals(); break;
         case 'settings': loadSettings(); break;
       }
     }
@@ -596,14 +620,26 @@
       try {
         const stats = await api('/api/admin/stats');
         const transactions = await api('/api/admin/transactions');
+        const pendingWithdrawals = await api('/api/admin/withdrawals/pending');
+        const pendingWithdrawalCount = pendingWithdrawals ? pendingWithdrawals.length : 0;
 
         document.getElementById('stats-grid').innerHTML = `
           <div class="stat-card"><div class="icon">👥</div><div class="label">Total Users</div><div class="value">${stats.totalUsers}</div><div class="change">${stats.activeUsers} active</div></div>
           <div class="stat-card"><div class="icon">💎</div><div class="label">Total Staked</div><div class="value">$${stats.totalStaked.toLocaleString()}</div><div class="change">USDT</div></div>
           <div class="stat-card"><div class="icon">📈</div><div class="label">Total Earnings</div><div class="value">$${stats.totalEarnings.toLocaleString()}</div><div class="change">Distributed</div></div>
           <div class="stat-card"><div class="icon">⏳</div><div class="label">Pending Approvals</div><div class="value">${stats.pendingApprovals}</div><div class="change">Awaiting review</div></div>
+          <div class="stat-card"><div class="icon">💸</div><div class="label">Pending Withdrawals</div><div class="value">${pendingWithdrawalCount}</div><div class="change">Awaiting approval</div></div>
         `;
         document.getElementById('pending-count').textContent = stats.pendingApprovals;
+
+        // Update withdrawal badge
+        const wCountEl = document.getElementById('withdrawal-count');
+        if (pendingWithdrawalCount > 0) {
+          wCountEl.textContent = pendingWithdrawalCount;
+          wCountEl.style.display = 'inline-block';
+        } else {
+          wCountEl.style.display = 'none';
+        }
         document.getElementById('recent-activity').innerHTML = transactions.slice(0, 5).map(tx => `
           <tr><td class="wallet-address">${tx.walletAddress}</td><td><span class="badge badge-info">${tx.type}</span></td><td>$${tx.amount.toLocaleString()}</td><td>${tx.date}</td><td><span class="badge badge-${tx.status === 'completed' ? 'success' : 'warning'}">${tx.status}</span></td></tr>
         `).join('') || '<tr><td colspan="5" class="empty-state">No recent activity</td></tr>';
@@ -755,6 +791,86 @@
           <tr><td>${tx.id}</td><td class="wallet-address">${tx.walletAddress}</td><td><span class="badge badge-info">${tx.type}</span></td><td>$${tx.amount.toLocaleString()}</td><td>${tx.date}</td><td><span class="badge badge-${tx.status === 'completed' ? 'success' : 'warning'}">${tx.status}</span></td></tr>
         `).join('') || '<tr><td colspan="6" class="empty-state">No transactions found</td></tr>';
       } catch (error) { showToast('Failed to load transactions', 'error'); }
+    }
+
+    async function loadWithdrawals() {
+      try {
+        const pending = await api('/api/admin/withdrawals/pending');
+        const allWithdrawals = await api('/api/admin/withdrawals');
+        const completedWithdrawals = allWithdrawals ? allWithdrawals.filter(w => w.status !== 'pending') : [];
+
+        // Update badge count
+        const countEl = document.getElementById('withdrawal-count');
+        if (pending && pending.length > 0) {
+          countEl.textContent = pending.length;
+          countEl.style.display = 'inline-block';
+        } else {
+          countEl.style.display = 'none';
+        }
+
+        // Render pending withdrawals
+        if (!pending || pending.length === 0) {
+          document.getElementById('withdrawals-table').innerHTML = '<tr><td colspan="8" class="empty-state"><div class="icon">✅</div><p>No pending withdrawals</p></td></tr>';
+        } else {
+          document.getElementById('withdrawals-table').innerHTML = pending.map(w => `
+            <tr>
+              <td>${w.id}</td>
+              <td class="wallet-address">${w.walletAddress.slice(0, 10)}...${w.walletAddress.slice(-8)}</td>
+              <td>$${w.amount.toLocaleString()}</td>
+              <td>$${w.fee.toFixed(2)}</td>
+              <td>$${w.netAmount.toFixed(2)}</td>
+              <td>${new Date(w.requestedAt).toLocaleString()}</td>
+              <td><span class="badge badge-warning">Pending</span></td>
+              <td>
+                <div class="action-btns">
+                  <button class="btn btn-success btn-sm" onclick="approveWithdrawal(${w.id})">✅ Approve</button>
+                  <button class="btn btn-danger btn-sm" onclick="rejectWithdrawal(${w.id})">❌ Reject</button>
+                </div>
+              </td>
+            </tr>
+          `).join('');
+        }
+
+        // Render completed/rejected withdrawals
+        if (!completedWithdrawals || completedWithdrawals.length === 0) {
+          document.getElementById('all-withdrawals-table').innerHTML = '<tr><td colspan="7" class="empty-state">No withdrawal history</td></tr>';
+        } else {
+          document.getElementById('all-withdrawals-table').innerHTML = completedWithdrawals.map(w => `
+            <tr>
+              <td>${w.id}</td>
+              <td class="wallet-address">${w.walletAddress.slice(0, 10)}...${w.walletAddress.slice(-8)}</td>
+              <td>$${w.amount.toLocaleString()}</td>
+              <td>$${w.fee.toFixed(2)}</td>
+              <td>$${w.netAmount.toFixed(2)}</td>
+              <td>${new Date(w.requestedAt).toLocaleString()}</td>
+              <td><span class="badge badge-${w.status === 'approved' ? 'success' : 'danger'}">${w.status}</span></td>
+            </tr>
+          `).join('');
+        }
+      } catch (error) {
+        console.error('Load withdrawals error:', error);
+        showToast('Failed to load withdrawals', 'error');
+      }
+    }
+
+    async function approveWithdrawal(id) {
+      if (!confirm('Are you sure you want to approve this withdrawal?')) return;
+      try {
+        await api('/api/admin/withdraw/approve', { method: 'POST', body: JSON.stringify({ withdrawalId: id }) });
+        showToast('Withdrawal approved!');
+        loadWithdrawals();
+        loadDashboard();
+      } catch (error) { showToast('Failed to approve withdrawal', 'error'); }
+    }
+
+    async function rejectWithdrawal(id) {
+      const reason = prompt('Enter rejection reason (optional):');
+      if (reason === null) return; // User cancelled
+      try {
+        await api('/api/admin/withdraw/reject', { method: 'POST', body: JSON.stringify({ withdrawalId: id, reason: reason || 'Rejected by admin' }) });
+        showToast('Withdrawal rejected');
+        loadWithdrawals();
+      } catch (error) { showToast('Failed to reject withdrawal', 'error'); }
     }
 
     async function loadSettings() {

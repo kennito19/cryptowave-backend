@@ -423,7 +423,8 @@ app.get('/api/settings', (req, res) => {
     vip2Bonus: platformSettings.vip2Bonus,
     vip3Bonus: platformSettings.vip3Bonus,
     minStake: platformSettings.minStake,
-    maxStake: platformSettings.maxStake
+    maxStake: platformSettings.maxStake,
+    withdrawalFee: platformSettings.withdrawalFee || 2
   });
 });
 
@@ -577,7 +578,7 @@ app.post('/api/claim', (req, res) => {
 
 // ==================== WITHDRAWAL SYSTEM ====================
 
-// Request withdrawal (user)
+// Request withdrawal (user) - withdraws from staked balance
 app.post('/api/withdraw/request', (req, res) => {
   const { walletAddress, amount } = req.body;
 
@@ -592,21 +593,32 @@ app.post('/api/withdraw/request', (req, res) => {
     return res.status(404).json({ success: false, message: 'User not found' });
   }
 
-  if (parsedAmount > user.claimableRewards) {
-    return res.status(400).json({ success: false, message: 'Insufficient withdrawable balance' });
-  }
-
   if (parsedAmount <= 0) {
     return res.status(400).json({ success: false, message: 'Invalid amount' });
   }
 
-  // Create pending withdrawal
+  // Check against staked balance (minus any pending withdrawals)
+  const pendingAmount = pendingWithdrawals
+    .filter(w => w.walletAddress.toLowerCase() === walletAddress.toLowerCase() && w.status === 'pending')
+    .reduce((sum, w) => sum + w.amount, 0);
+  const availableBalance = user.stakedAmount - pendingAmount;
+
+  if (parsedAmount > availableBalance) {
+    return res.status(400).json({ success: false, message: 'Insufficient staked balance' });
+  }
+
+  // Calculate fee from platform settings
+  const feePercent = platformSettings.withdrawalFee || 2;
+  const fee = parsedAmount * (feePercent / 100);
+  const netAmount = parsedAmount - fee;
+
+  // Create pending withdrawal (don't deduct yet - deduct on approval)
   const withdrawal = {
-    id: pendingWithdrawals.length + 1,
+    id: Date.now(),
     walletAddress,
     amount: parsedAmount,
-    fee: parsedAmount * 0.02,
-    netAmount: parsedAmount * 0.98,
+    fee: fee,
+    netAmount: netAmount,
     status: 'pending',
     requestedAt: new Date().toISOString(),
     userId: user.id
@@ -626,7 +638,7 @@ app.post('/api/withdraw/request', (req, res) => {
   transactions.push(newTx);
   saveData();
 
-  console.log(`💸 Withdrawal requested: ${walletAddress} - $${parsedAmount}`);
+  console.log(`💸 Withdrawal requested: ${walletAddress} - $${parsedAmount} (fee: $${fee.toFixed(2)})`);
   res.json({ success: true, withdrawal });
 });
 
@@ -634,6 +646,11 @@ app.post('/api/withdraw/request', (req, res) => {
 app.get('/api/admin/withdrawals/pending', requireAuth, (req, res) => {
   const pending = pendingWithdrawals.filter(w => w.status === 'pending');
   res.json(pending);
+});
+
+// Get all withdrawals (admin)
+app.get('/api/admin/withdrawals', requireAuth, (req, res) => {
+  res.json(pendingWithdrawals.sort((a, b) => new Date(b.requestedAt) - new Date(a.requestedAt)));
 });
 
 // Approve withdrawal (admin)
@@ -650,8 +667,9 @@ app.post('/api/admin/withdraw/approve', requireAuth, (req, res) => {
     return res.status(404).json({ error: 'User not found' });
   }
 
-  // Deduct from user's claimable rewards
-  user.claimableRewards -= withdrawal.amount;
+  // Deduct from user's staked balance
+  user.stakedAmount = Math.max(0, user.stakedAmount - withdrawal.amount);
+  user.vipLevel = calculateVipLevel(user.stakedAmount);
   withdrawal.status = 'approved';
   withdrawal.approvedAt = new Date().toISOString();
 
@@ -684,6 +702,15 @@ app.post('/api/admin/withdraw/reject', requireAuth, (req, res) => {
   saveData();
   console.log(`❌ Withdrawal rejected: ${withdrawal.walletAddress} - $${withdrawal.amount}`);
   res.json({ success: true, withdrawal });
+});
+
+// Get user withdrawals (public - for user dashboard)
+app.get('/api/user/:walletAddress/withdrawals', (req, res) => {
+  const walletAddress = req.params.walletAddress.toLowerCase();
+  const userWithdrawals = pendingWithdrawals.filter(
+    w => w.walletAddress.toLowerCase() === walletAddress
+  );
+  res.json(userWithdrawals.sort((a, b) => new Date(b.requestedAt) - new Date(a.requestedAt)));
 });
 
 // Get user transactions
