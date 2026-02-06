@@ -123,7 +123,9 @@ let platformSettings = {
   minStake: 100,
   maxStake: 1000000,
   withdrawalFee: 0.5,
-  maintenanceMode: false
+  maintenanceMode: false,
+  platformWallet: '',
+  commissionWallet: ''
 };
 
 // Load saved data on startup
@@ -427,7 +429,9 @@ app.get('/api/settings', (req, res) => {
     vip3Bonus: platformSettings.vip3Bonus,
     minStake: platformSettings.minStake,
     maxStake: platformSettings.maxStake,
-    withdrawalFee: platformSettings.withdrawalFee || 2
+    withdrawalFee: platformSettings.withdrawalFee || 2,
+    platformWallet: platformSettings.platformWallet || '',
+    commissionWallet: platformSettings.commissionWallet || ''
   });
 });
 

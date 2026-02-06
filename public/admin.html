@@ -401,6 +401,10 @@
 
         <div class="nav-section">
           <div class="nav-section-title">Finance</div>
+          <button class="nav-item" data-page="platform-wallets">
+            <span class="icon">🏦</span>
+            <span>Platform Wallets</span>
+          </button>
           <button class="nav-item" data-page="transactions">
             <span class="icon">💳</span>
             <span>Transactions</span>
@@ -497,6 +501,36 @@
               <thead><tr><th>ID</th><th>Wallet Address</th><th>Amount</th><th>Fee</th><th>Net Amount</th><th>Requested</th><th>Status</th></tr></thead>
               <tbody id="all-withdrawals-table"><tr><td colspan="7" class="loading"><div class="spinner"></div></td></tr></tbody>
             </table>
+          </div>
+        </section>
+
+        <!-- Platform Wallets Page -->
+        <section id="page-platform-wallets" class="page-section">
+          <div class="section-title">Platform Wallets</div>
+          <p style="color: #94a3b8; margin-bottom: 24px;">Configure the wallets used by the platform. The <strong>Platform Wallet</strong> is where user stakes are stored. The <strong>Commission Wallet</strong> is where withdrawal fees and commissions are sent.</p>
+          <div class="settings-grid">
+            <div class="card">
+              <div class="card-title">🏦 Platform Wallet (Stake Storage)</div>
+              <p style="color: #94a3b8; font-size: 13px; margin-bottom: 16px;">This is the main wallet where all user staked funds are held. When users stake USDT, it goes to this address.</p>
+              <div class="form-group">
+                <label>Wallet Address</label>
+                <input type="text" class="form-input" id="setting-platformWallet" placeholder="0x..." style="font-family: monospace;">
+              </div>
+              <div id="platform-wallet-status" style="margin-top: 8px;"></div>
+            </div>
+            <div class="card">
+              <div class="card-title">💰 Commission Wallet (Fee Collection)</div>
+              <p style="color: #94a3b8; font-size: 13px; margin-bottom: 16px;">Withdrawal fees and platform commissions are sent to this address. This can be the same as or different from the platform wallet.</p>
+              <div class="form-group">
+                <label>Wallet Address</label>
+                <input type="text" class="form-input" id="setting-commissionWallet" placeholder="0x..." style="font-family: monospace;">
+              </div>
+              <div id="commission-wallet-status" style="margin-top: 8px;"></div>
+            </div>
+          </div>
+          <div style="display: flex; gap: 12px; margin-top: 16px;">
+            <button class="btn btn-primary" onclick="savePlatformWallets()">Save Wallets</button>
+            <button class="btn" onclick="loadPlatformWallets()" style="background: #1e293b; color: #e2e8f0; border: 1px solid #334155;">Refresh</button>
           </div>
         </section>
 
@@ -612,6 +646,7 @@
         case 'approvals': loadApprovals(); break;
         case 'transactions': loadTransactions(); break;
         case 'withdrawals': loadWithdrawals(); break;
+        case 'platform-wallets': loadPlatformWallets(); break;
         case 'settings': loadSettings(); break;
       }
     }
@@ -872,6 +907,64 @@
         loadWithdrawals();
       } catch (error) { showToast('Failed to reject withdrawal', 'error'); }
     }
+
+    // ==================== PLATFORM WALLETS ====================
+
+    async function loadPlatformWallets() {
+      try {
+        const settings = await api('/api/admin/settings');
+        document.getElementById('setting-platformWallet').value = settings.platformWallet || '';
+        document.getElementById('setting-commissionWallet').value = settings.commissionWallet || '';
+
+        // Show status indicators
+        const pwStatus = document.getElementById('platform-wallet-status');
+        const cwStatus = document.getElementById('commission-wallet-status');
+
+        if (settings.platformWallet) {
+          pwStatus.innerHTML = '<span style="color: #22c55e; font-size: 13px;">✅ Configured: ' + settings.platformWallet.slice(0,6) + '...' + settings.platformWallet.slice(-4) + '</span>';
+        } else {
+          pwStatus.innerHTML = '<span style="color: #f59e0b; font-size: 13px;">⚠️ Not configured yet</span>';
+        }
+
+        if (settings.commissionWallet) {
+          cwStatus.innerHTML = '<span style="color: #22c55e; font-size: 13px;">✅ Configured: ' + settings.commissionWallet.slice(0,6) + '...' + settings.commissionWallet.slice(-4) + '</span>';
+        } else {
+          cwStatus.innerHTML = '<span style="color: #f59e0b; font-size: 13px;">⚠️ Not configured yet</span>';
+        }
+      } catch (error) { showToast('Failed to load platform wallets', 'error'); }
+    }
+
+    async function savePlatformWallets() {
+      try {
+        const platformWallet = document.getElementById('setting-platformWallet').value.trim();
+        const commissionWallet = document.getElementById('setting-commissionWallet').value.trim();
+
+        // Basic validation
+        if (platformWallet && !platformWallet.startsWith('0x')) {
+          showToast('Platform wallet must start with 0x', 'error');
+          return;
+        }
+        if (commissionWallet && !commissionWallet.startsWith('0x')) {
+          showToast('Commission wallet must start with 0x', 'error');
+          return;
+        }
+
+        // Get current settings and merge
+        const current = await api('/api/admin/settings');
+        await api('/api/admin/settings', {
+          method: 'PUT',
+          body: JSON.stringify({
+            ...current,
+            platformWallet,
+            commissionWallet
+          })
+        });
+        showToast('Platform wallets saved successfully', 'success');
+        loadPlatformWallets();
+      } catch (error) { showToast('Failed to save platform wallets', 'error'); }
+    }
+
+    // ==================== SETTINGS ====================
 
     async function loadSettings() {
       try {
