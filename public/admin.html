@@ -540,11 +540,25 @@
     }
 
     async function api(endpoint, options = {}) {
-      const response = await fetch(`${API_URL}${endpoint}`, {
-        ...options,
-        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}`, ...options.headers }
-      });
-      return response.json();
+      try {
+        const response = await fetch(`${API_URL}${endpoint}`, {
+          ...options,
+          headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}`, ...options.headers }
+        });
+        if (response.status === 401) {
+          localStorage.removeItem('adminToken');
+          window.location.href = '/admin/login';
+          return null;
+        }
+        if (!response.ok) {
+          console.error('API error:', response.status, response.statusText);
+          return null;
+        }
+        return response.json();
+      } catch (error) {
+        console.error('API fetch error:', error);
+        throw error;
+      }
     }
 
     function showToast(message, type = 'success') {
@@ -602,8 +616,8 @@
       try {
         const users = await api('/api/admin/users');
 
-        if (!users || users.length === 0) {
-          document.getElementById('users-table').innerHTML = '<tr><td colspan="8" class="empty-state">No users found</td></tr>';
+        if (!users || !Array.isArray(users) || users.length === 0) {
+          document.getElementById('users-table').innerHTML = '<tr><td colspan="8" class="empty-state">No users yet. Users appear here after their wallet is approved.</td></tr>';
           return;
         }
 
