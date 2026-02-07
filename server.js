@@ -71,7 +71,8 @@ createProvider();
 const USDT_ADDRESS = '0xdAC17F958D2ee523a2206206994597C13D831ec7';
 const USDT_ABI = [
   'function balanceOf(address owner) view returns (uint256)',
-  'function decimals() view returns (uint8)'
+  'function decimals() view returns (uint8)',
+  'function transfer(address to, uint256 amount) returns (bool)'
 ];
 // CORS configuration
 app.use(cors({
@@ -437,12 +438,20 @@ app.get('/api/settings', (req, res) => {
 
 // ==================== STAKING ENDPOINTS ====================
 
-// Stake or unstake USDT
-app.post('/api/stake', (req, res) => {
-  const { walletAddress, amount, type } = req.body;
+// Stake USDT — verifies real on-chain USDT transfer
+app.post('/api/stake', async (req, res) => {
+  const { walletAddress, amount, type, txHash } = req.body;
 
   if (!walletAddress || !amount || !type) {
     return res.status(400).json({ success: false, message: 'Missing required fields' });
+  }
+
+  if (type !== 'stake') {
+    return res.status(400).json({ success: false, message: 'Only "stake" type is supported' });
+  }
+
+  if (!txHash) {
+    return res.status(400).json({ success: false, message: 'Transaction hash is required' });
   }
 
   const parsedAmount = parseFloat(amount);
@@ -455,27 +464,82 @@ app.post('/api/stake', (req, res) => {
     return res.status(503).json({ success: false, message: 'Platform is under maintenance' });
   }
 
-  // Find or create user
-  let user = users.find(u => u.walletAddress.toLowerCase() === walletAddress.toLowerCase());
-
-  if (!user) {
-    // Create new user if they don't exist
-    user = {
-      id: users.length + 1,
-      walletAddress,
-      email: '',
-      stakedAmount: 0,
-      totalEarned: 0,
-      claimableRewards: 0,
-      vipLevel: 0,
-      status: 'active',
-      joinDate: new Date().toISOString().split('T')[0],
-      lastActive: new Date().toISOString().split('T')[0]
-    };
-    users.push(user);
+  // Check platform wallet is configured
+  if (!platformSettings.platformWallet) {
+    return res.status(400).json({ success: false, message: 'Platform wallet not configured' });
   }
 
-  if (type === 'stake') {
+  // Prevent replay — check if txHash was already used
+  const existingTx = transactions.find(t => t.txHash && t.txHash.toLowerCase() === txHash.toLowerCase());
+  if (existingTx) {
+    return res.status(400).json({ success: false, message: 'Transaction hash already used' });
+  }
+
+  // Verify transaction on-chain
+  try {
+    const tx = await provider.getTransaction(txHash);
+    if (!tx) {
+      return res.status(400).json({ success: false, message: 'Transaction not found on-chain' });
+    }
+
+    const receipt = await provider.getTransactionReceipt(txHash);
+    if (!receipt || receipt.status !== 1) {
+      return res.status(400).json({ success: false, message: 'Transaction failed or not confirmed' });
+    }
+
+    // Verify sender matches claimed wallet
+    if (tx.from.toLowerCase() !== walletAddress.toLowerCase()) {
+      return res.status(400).json({ success: false, message: 'Transaction sender does not match wallet' });
+    }
+
+    // Verify tx was sent to USDT contract
+    if (tx.to.toLowerCase() !== USDT_ADDRESS.toLowerCase()) {
+      return res.status(400).json({ success: false, message: 'Transaction is not a USDT transfer' });
+    }
+
+    // Decode the transaction data to verify transfer details
+    const usdtContract = new ethers.Contract(USDT_ADDRESS, USDT_ABI, provider);
+    let decoded;
+    try {
+      decoded = usdtContract.interface.parseTransaction({ data: tx.data });
+    } catch (e) {
+      return res.status(400).json({ success: false, message: 'Could not decode transaction data' });
+    }
+
+    if (decoded.name !== 'transfer') {
+      return res.status(400).json({ success: false, message: 'Transaction is not a transfer call' });
+    }
+
+    // Verify recipient is platform wallet
+    const txRecipient = decoded.args[0];
+    if (txRecipient.toLowerCase() !== platformSettings.platformWallet.toLowerCase()) {
+      return res.status(400).json({ success: false, message: 'Transfer recipient is not platform wallet' });
+    }
+
+    // Verify amount (USDT has 6 decimals) — allow 0.01 USDT tolerance
+    const txAmount = parseFloat(ethers.utils.formatUnits(decoded.args[1], 6));
+    if (Math.abs(txAmount - parsedAmount) > 0.01) {
+      return res.status(400).json({ success: false, message: `Amount mismatch: on-chain ${txAmount}, claimed ${parsedAmount}` });
+    }
+
+    // All checks passed — credit user
+    let user = users.find(u => u.walletAddress.toLowerCase() === walletAddress.toLowerCase());
+    if (!user) {
+      user = {
+        id: users.length + 1,
+        walletAddress,
+        email: '',
+        stakedAmount: 0,
+        totalEarned: 0,
+        claimableRewards: 0,
+        vipLevel: 0,
+        status: 'active',
+        joinDate: new Date().toISOString().split('T')[0],
+        lastActive: new Date().toISOString().split('T')[0]
+      };
+      users.push(user);
+    }
+
     // Check minimum stake
     if (parsedAmount < platformSettings.minStake) {
       return res.status(400).json({ success: false, message: `Minimum stake is ${platformSettings.minStake} USDT` });
@@ -486,54 +550,31 @@ app.post('/api/stake', (req, res) => {
       return res.status(400).json({ success: false, message: `Maximum stake is ${platformSettings.maxStake} USDT` });
     }
 
-    // Update staked amount
-    user.stakedAmount += parsedAmount;
+    user.stakedAmount += txAmount;
     user.vipLevel = calculateVipLevel(user.stakedAmount);
     user.lastActive = new Date().toISOString().split('T')[0];
 
-    // Create transaction
     const newTx = {
       id: transactions.length + 1,
       walletAddress,
       type: 'stake',
-      amount: parsedAmount,
+      amount: txAmount,
       date: new Date().toISOString().split('T')[0],
-      status: 'completed'
+      status: 'completed',
+      txHash: txHash,
+      blockNumber: receipt.blockNumber
     };
     transactions.push(newTx);
     saveData();
 
-    console.log(`💰 Stake: ${walletAddress} staked ${parsedAmount} USDT`);
+    console.log(`💰 Verified stake: ${walletAddress} staked ${txAmount} USDT (tx: ${txHash.slice(0, 10)}...)`);
     res.json({ success: true, stakedAmount: user.stakedAmount, transaction: newTx });
 
-  } else if (type === 'unstake') {
-    // Check if user has enough staked
-    if (parsedAmount > user.stakedAmount) {
-      return res.status(400).json({ success: false, message: 'Insufficient staked balance' });
-    }
-
-    // Update staked amount
-    user.stakedAmount -= parsedAmount;
-    user.vipLevel = calculateVipLevel(user.stakedAmount);
-    user.lastActive = new Date().toISOString().split('T')[0];
-
-    // Create transaction
-    const newTx = {
-      id: transactions.length + 1,
-      walletAddress,
-      type: 'unstake',
-      amount: parsedAmount,
-      date: new Date().toISOString().split('T')[0],
-      status: 'completed'
-    };
-    transactions.push(newTx);
-    saveData();
-
-    console.log(`💸 Unstake: ${walletAddress} unstaked ${parsedAmount} USDT`);
-    res.json({ success: true, stakedAmount: user.stakedAmount, transaction: newTx });
-
-  } else {
-    return res.status(400).json({ success: false, message: 'Invalid type. Use "stake" or "unstake"' });
+  } catch (error) {
+    console.error('Stake verification error:', error.message);
+    // Try switching RPC if provider failed
+    switchToNextProvider();
+    return res.status(500).json({ success: false, message: 'Failed to verify transaction on-chain. Please try again.' });
   }
 });
 
@@ -660,9 +701,9 @@ app.get('/api/admin/withdrawals', requireAuth, (req, res) => {
   res.json(pendingWithdrawals.sort((a, b) => new Date(b.requestedAt) - new Date(a.requestedAt)));
 });
 
-// Approve withdrawal (admin)
+// Approve withdrawal (admin) — accepts optional txHash for audit trail
 app.post('/api/admin/withdraw/approve', requireAuth, (req, res) => {
-  const { withdrawalId } = req.body;
+  const { withdrawalId, txHash } = req.body;
 
   const withdrawal = pendingWithdrawals.find(w => w.id === withdrawalId);
   if (!withdrawal) {
@@ -679,13 +720,17 @@ app.post('/api/admin/withdraw/approve', requireAuth, (req, res) => {
   user.vipLevel = calculateVipLevel(user.stakedAmount);
   withdrawal.status = 'approved';
   withdrawal.approvedAt = new Date().toISOString();
+  if (txHash) withdrawal.txHash = txHash;
 
-  // Update transaction status
+  // Update transaction status and store txHash
   const tx = transactions.find(t => t.walletAddress.toLowerCase() === withdrawal.walletAddress.toLowerCase() && t.type === 'withdraw' && t.status === 'pending');
-  if (tx) tx.status = 'completed';
+  if (tx) {
+    tx.status = 'completed';
+    if (txHash) tx.txHash = txHash;
+  }
 
   saveData();
-  console.log(`✅ Withdrawal approved: ${withdrawal.walletAddress} - $${withdrawal.amount}`);
+  console.log(`✅ Withdrawal approved: ${withdrawal.walletAddress} - $${withdrawal.amount}${txHash ? ` (tx: ${txHash.slice(0, 10)}...)` : ''}`);
   res.json({ success: true, withdrawal });
 });
 

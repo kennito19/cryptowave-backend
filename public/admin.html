@@ -559,6 +559,49 @@
     </main>
   </div>
 
+  <!-- Withdrawal Approval Modal -->
+  <div class="modal-overlay" id="approve-withdrawal-modal">
+    <div class="modal">
+      <div class="modal-header"><h3>Approve Withdrawal</h3><button class="modal-close" onclick="closeModal('approve-withdrawal-modal')">&times;</button></div>
+      <div class="modal-body">
+        <input type="hidden" id="approve-withdrawal-id">
+        <div style="background: rgba(251, 191, 36, 0.1); border: 1px solid rgba(251, 191, 36, 0.3); border-radius: 10px; padding: 1rem; margin-bottom: 1.25rem;">
+          <div style="font-size: 0.85rem; color: #fbbf24; font-weight: 600; margin-bottom: 0.5rem;">Instructions</div>
+          <div style="font-size: 0.8rem; color: rgba(255,255,255,0.7); line-height: 1.5;">
+            1. Send the net USDT amount from the platform wallet to the user's wallet below.<br>
+            2. Copy the transaction hash from your wallet/Etherscan.<br>
+            3. Paste it below and click Confirm Approval.
+          </div>
+        </div>
+        <div class="form-group">
+          <label>User Wallet Address</label>
+          <div style="display: flex; gap: 0.5rem; align-items: center;">
+            <input type="text" class="form-input" id="approve-wallet-address" readonly style="font-family: monospace; font-size: 0.8rem;">
+            <button class="btn btn-primary btn-sm" onclick="copyApprovalWallet()" title="Copy address" style="white-space: nowrap;">Copy</button>
+          </div>
+        </div>
+        <div class="form-row">
+          <div class="form-group">
+            <label>Gross Amount</label>
+            <input type="text" class="form-input" id="approve-gross-amount" readonly>
+          </div>
+          <div class="form-group">
+            <label>Net Amount (send this)</label>
+            <input type="text" class="form-input" id="approve-net-amount" readonly style="color: #10b981; font-weight: 700;">
+          </div>
+        </div>
+        <div class="form-group">
+          <label>Transaction Hash (optional but recommended)</label>
+          <input type="text" class="form-input" id="approve-tx-hash" placeholder="0x..." style="font-family: monospace;">
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-danger" onclick="closeModal('approve-withdrawal-modal')">Cancel</button>
+        <button class="btn btn-success" onclick="confirmApproveWithdrawal()">Confirm Approval</button>
+      </div>
+    </div>
+  </div>
+
   <!-- Edit User Modal -->
   <div class="modal-overlay" id="edit-user-modal">
     <div class="modal">
@@ -850,7 +893,7 @@
           document.getElementById('withdrawals-table').innerHTML = pending.map(w => `
             <tr>
               <td>${w.id}</td>
-              <td class="wallet-address">${w.walletAddress.slice(0, 10)}...${w.walletAddress.slice(-8)}</td>
+              <td class="wallet-address" title="${w.walletAddress}">${w.walletAddress}</td>
               <td>$${w.amount.toLocaleString()}</td>
               <td>$${w.fee.toFixed(2)}</td>
               <td>$${w.netAmount.toFixed(2)}</td>
@@ -888,10 +931,43 @@
       }
     }
 
-    async function approveWithdrawal(id) {
-      if (!confirm('Are you sure you want to approve this withdrawal?')) return;
+    function approveWithdrawal(id) {
+      // Find the withdrawal to populate modal
+      const pending = document.querySelectorAll('#withdrawals-table tr');
+      let walletAddress = '', grossAmount = '', netAmount = '';
+      for (const row of pending) {
+        const cells = row.querySelectorAll('td');
+        if (cells.length > 0 && cells[0].textContent == id) {
+          walletAddress = cells[1].textContent;
+          grossAmount = cells[2].textContent;
+          netAmount = cells[4].textContent;
+          break;
+        }
+      }
+
+      document.getElementById('approve-withdrawal-id').value = id;
+      document.getElementById('approve-wallet-address').value = walletAddress;
+      document.getElementById('approve-gross-amount').value = grossAmount;
+      document.getElementById('approve-net-amount').value = netAmount;
+      document.getElementById('approve-tx-hash').value = '';
+      document.getElementById('approve-withdrawal-modal').classList.add('show');
+    }
+
+    function copyApprovalWallet() {
+      const addr = document.getElementById('approve-wallet-address').value;
+      navigator.clipboard.writeText(addr);
+      showToast('Wallet address copied!');
+    }
+
+    async function confirmApproveWithdrawal() {
+      const id = parseInt(document.getElementById('approve-withdrawal-id').value);
+      const txHash = document.getElementById('approve-tx-hash').value.trim();
+
       try {
-        await api('/api/admin/withdraw/approve', { method: 'POST', body: JSON.stringify({ withdrawalId: id }) });
+        const body = { withdrawalId: id };
+        if (txHash) body.txHash = txHash;
+        await api('/api/admin/withdraw/approve', { method: 'POST', body: JSON.stringify(body) });
+        closeModal('approve-withdrawal-modal');
         showToast('Withdrawal approved!');
         loadWithdrawals();
         loadDashboard();
